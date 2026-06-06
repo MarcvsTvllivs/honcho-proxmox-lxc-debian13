@@ -39,9 +39,6 @@ Options:
   --ssh-pubkey FILE         Install SSH public key
   --honcho-repo URL         Honcho repo URL (default: upstream Honcho)
   --honcho-ref REF          Git ref/branch/tag (default: main)
-  --anthropic-key KEY       Anthropic API key (optional)
-  --openai-key KEY          OpenAI API key (optional)
-  --gemini-key KEY          Gemini API key (optional)
   --auth                    Enable Honcho auth (JWT secret generated)
   --no-auth                 Disable Honcho auth (default)
   --yes                     Skip confirmation prompt
@@ -209,9 +206,6 @@ main() {
       --ssh-pubkey) SSH_PUBKEY_FILE="$2"; shift 2 ;;
       --honcho-repo) HONCHO_REPO="$2"; shift 2 ;;
       --honcho-ref) HONCHO_REF="$2"; shift 2 ;;
-      --anthropic-key) ANTHROPIC_KEY="$2"; shift 2 ;;
-      --openai-key) OPENAI_KEY="$2"; shift 2 ;;
-      --gemini-key) GEMINI_KEY="$2"; shift 2 ;;
       --auth) ENABLE_AUTH="true"; shift ;;
       --no-auth) ENABLE_AUTH="false"; shift ;;
       --yes) YES="true"; shift ;;
