@@ -9,3 +9,8 @@ curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-de
 chmod +x honcho-proxmox-lxc-debian13.sh
 sudo ./honcho-proxmox-lxc-debian13.sh
 ```
+
+## Notes
+
+- The script prompts interactively for API keys when needed.
+- Do not pass secrets on the command line if you can avoid it.
