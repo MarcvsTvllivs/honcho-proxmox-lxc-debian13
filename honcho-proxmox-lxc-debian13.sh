@@ -364,6 +364,16 @@ else
 fi
 cd /opt/honcho
 cp -f docker-compose.yml.example docker-compose.yml
+python3 - <<'PY'
+from pathlib import Path
+path = Path('/opt/honcho/docker-compose.yml')
+text = path.read_text()
+old = '  - "127.0.0.1:8000:8000"\n'
+new = '  - "0.0.0.0:8000:8000"\n'
+if old not in text:
+    raise SystemExit('Could not find localhost-only Honcho API port mapping in docker-compose.yml')
+path.write_text(text.replace(old, new, 1))
+PY
 cp -f .env.template .env
 "
 

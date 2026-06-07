@@ -22,5 +22,6 @@ chmod +x honcho-proxmox-lxc-debian13.sh
 
 - Run this on the Proxmox host as root.
 - The script prompts interactively for any required values.
+- Honcho's API is exposed on the container network interface so other LXCs can reach it on port 8000.
 - IPv6 is disabled inside the container after creation; it is not passed as a `net0` option.
 - Do not pass secrets on the command line if you can avoid it.
