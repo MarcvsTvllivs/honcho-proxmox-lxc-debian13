@@ -4,13 +4,22 @@ This repo contains a Proxmox-host installer for creating a dedicated Honcho LXC 
 
 ## Usage
 
+### Community-scripts-style one-liner
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)"
+```
+
+### Download-then-run
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/honcho-proxmox-lxc-debian13.sh -o honcho-proxmox-lxc-debian13.sh
 chmod +x honcho-proxmox-lxc-debian13.sh
-sudo ./honcho-proxmox-lxc-debian13.sh
+./honcho-proxmox-lxc-debian13.sh
 ```
 
 ## Notes
 
-- The script prompts interactively for API keys when needed.
+- Run this on the Proxmox host as root.
+- The script prompts interactively for any required values.
 - Do not pass secrets on the command line if you can avoid it.
