@@ -292,10 +292,10 @@ main() {
 
   local NETCFG
   if [[ "$IPMODE" == dhcp ]]; then
-    NETCFG="name=eth0,bridge=${BRIDGE},ip=dhcp,ip6=none"
+    NETCFG="name=eth0,bridge=${BRIDGE},ip=dhcp"
   else
     [[ -n "$GW" ]] || die "Static IP mode requires --gw"
-    NETCFG="name=eth0,bridge=${BRIDGE},ip=${IPMODE},gw=${GW},ip6=none"
+    NETCFG="name=eth0,bridge=${BRIDGE},ip=${IPMODE},gw=${GW}"
   fi
   if [[ -n "$VLAN_TAG" ]]; then
     NETCFG+=",tag=${VLAN_TAG}"
@@ -326,6 +326,14 @@ main() {
 
   log "Starting container $CTID"
   pct start "$CTID"
+
+  log "Disabling IPv6 inside the container"
+  pct exec "$CTID" -- bash -lc 'cat >/etc/sysctl.d/99-disable-ipv6.conf <<"EOF"
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+sysctl --system >/dev/null || true'
 
   log "Installing Docker + dependencies in the container"
   pct exec "$CTID" -- bash -lc 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl git gnupg lsb-release docker.io docker-compose-plugin'
