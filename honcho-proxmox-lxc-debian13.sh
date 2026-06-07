@@ -20,7 +20,7 @@ Defaults:
   - Debian 13 template (requires a Debian 13 template in pveam)
   - unprivileged container
   - nesting/keyctl enabled for Docker-in-LXC
-  - IPv4 via DHCP, IPv6 disabled (ip6=none)
+  - IPv4 via DHCP; IPv6 disabled inside the container after creation
 
 Options:
   --ctid ID                 Container ID to create (required unless prompted)
@@ -333,10 +333,22 @@ net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
-sysctl --system >/dev/null || true'
+sysctl -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1 net.ipv6.conf.lo.disable_ipv6=1 >/dev/null 2>&1 || true'
 
   log "Installing Docker + dependencies in the container"
-  pct exec "$CTID" -- bash -lc 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl git gnupg lsb-release docker.io docker-compose-plugin'
+  pct exec "$CTID" -- bash -lc 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl git gnupg lsb-release docker.io docker-compose'
+  pct exec "$CTID" -- bash -lc 'cat >/usr/local/bin/honcho-compose <<"EOF"
+#!/usr/bin/env bash
+set -euo pipefail
+if docker compose version >/dev/null 2>&1; then
+  exec docker compose "$@"
+elif command -v docker-compose >/dev/null 2>&1; then
+  exec docker-compose "$@"
+fi
+echo "Docker Compose is not available" >&2
+exit 1
+EOF
+chmod +x /usr/local/bin/honcho-compose'
   pct exec "$CTID" -- bash -lc 'systemctl enable --now docker'
 
   log "Cloning Honcho"
@@ -381,8 +393,8 @@ After=docker.service network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/honcho
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose down
+ExecStart=/usr/local/bin/honcho-compose up -d
+ExecStop=/usr/local/bin/honcho-compose down
 TimeoutStartSec=0
 
 [Install]
