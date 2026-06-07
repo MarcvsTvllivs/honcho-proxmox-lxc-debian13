@@ -11,10 +11,16 @@ set -Eeuo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  honcho-proxmox-lxc-debian13.sh [options]
+  honcho-proxmox-lxc-debian13.sh install [options]
+  honcho-proxmox-lxc-debian13.sh status --ctid ID
+  honcho-proxmox-lxc-debian13.sh backup --ctid ID [--backup-dir DIR]
+  honcho-proxmox-lxc-debian13.sh update --ctid ID [--honcho-ref REF] [--no-snapshot] [--no-backup] [--yes]
 
-Creates a dedicated Proxmox LXC for Honcho, installs Docker, clones Honcho,
-and starts it under systemd.
+With no subcommand, install is assumed for backward compatibility.
+
+Creates and maintains a dedicated Proxmox LXC for Honcho. Install creates the
+LXC, installs Docker, clones Honcho, and starts it under systemd. Status, backup,
+and update operate on an existing Honcho LXC.
 
 Defaults:
   - Debian 13 template (requires a Debian 13 template in pveam)
@@ -22,7 +28,7 @@ Defaults:
   - nesting/keyctl enabled for Docker-in-LXC
   - IPv4 via DHCP; IPv6 disabled inside the container after creation
 
-Options:
+Install options:
   --ctid ID                 Container ID to create (required unless prompted)
   --hostname NAME           Container hostname (default: honcho)
   --bridge NAME             Proxmox bridge (default: auto-detect)
@@ -43,6 +49,13 @@ Options:
   --no-auth                 Disable Honcho auth (default)
   --yes                     Skip confirmation prompt
   --dry-run                 Print planned actions without changing anything
+
+Maintenance options:
+  --ctid ID                 Existing Honcho container ID
+  --backup-dir DIR          Host-side backup directory (default: /root/honcho-backups)
+  --no-snapshot             Do not create a Proxmox snapshot before update
+  --no-backup               Do not run a logical backup before update
+  --yes                     Skip maintenance confirmation prompts
   -h, --help                Show this help
 
 After creation, the script prints the Honcho URL. In Hermes, run:
@@ -164,7 +177,7 @@ need_root() {
   [[ ${EUID:-$(id -u)} -eq 0 ]] || die "Run this on the Proxmox host as root."
 }
 
-main() {
+install_main() {
   local CTID=""
   local HOSTNAME="honcho"
   local BRIDGE=""
@@ -434,6 +447,213 @@ Hermes hookup:
   3. Point it at: http://$CT_IP:8000
 
 EOF
+}
+
+
+ensure_ct_exists() {
+  local ctid="$1"
+  [[ "$ctid" =~ ^[0-9]+$ ]] || die "CTID must be numeric."
+  pct status "$ctid" >/dev/null 2>&1 || die "Container $ctid does not exist."
+}
+
+ensure_ct_running() {
+  local ctid="$1"
+  ensure_ct_exists "$ctid"
+  if ! pct status "$ctid" | grep -q 'status: running'; then
+    log "Starting container $ctid"
+    pct start "$ctid"
+  fi
+}
+
+compose_exec() {
+  local ctid="$1"; shift
+  pct exec "$ctid" -- bash -lc 'cd /opt/honcho && /usr/local/bin/honcho-compose "$@"' bash "$@"
+}
+
+parse_existing_ctid_args() {
+  CTID=""
+  BACKUP_DIR="/root/honcho-backups"
+  HONCHO_REF="main"
+  YES="false"
+  MAKE_SNAPSHOT="true"
+  MAKE_BACKUP="true"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ctid) CTID="$2"; shift 2 ;;
+      --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
+      --honcho-ref) HONCHO_REF="$2"; shift 2 ;;
+      --yes) YES="true"; shift ;;
+      --no-snapshot) MAKE_SNAPSHOT="false"; shift ;;
+      --no-backup) MAKE_BACKUP="false"; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "Unknown argument: $1" ;;
+    esac
+  done
+  [[ -n "$CTID" ]] || die "Please provide --ctid for maintenance commands."
+}
+
+status_main() {
+  local CTID BACKUP_DIR HONCHO_REF YES MAKE_SNAPSHOT MAKE_BACKUP
+  parse_existing_ctid_args "$@"
+  need_root
+  have pct || die "pct not found. Are you on the Proxmox host?"
+  ensure_ct_running "$CTID"
+
+  log "Proxmox container status"
+  pct status "$CTID"
+  pct config "$CTID" | sed -n '1,80p'
+
+  log "Honcho service status"
+  pct exec "$CTID" -- bash -lc 'systemctl --no-pager --full status honcho.service || true'
+
+  log "Docker Compose status"
+  pct exec "$CTID" -- bash -lc 'cd /opt/honcho && /usr/local/bin/honcho-compose ps || true'
+
+  log "Honcho git version"
+  pct exec "$CTID" -- bash -lc 'cd /opt/honcho && git status --short && git log -1 --oneline || true'
+
+  log "Local health checks"
+  pct exec "$CTID" -- bash -lc 'curl -fsS http://127.0.0.1:8000/health 2>/dev/null || curl -fsSI http://127.0.0.1:8000 2>/dev/null || true'
+
+  local CT_IP
+  CT_IP="$(pct exec "$CTID" -- bash -lc "hostname -I | awk '{print \$1}'" 2>/dev/null || true)"
+  [[ -n "$CT_IP" ]] && printf '\nHoncho URL from other LXCs: http://%s:8000\n' "$CT_IP"
+}
+
+backup_main() {
+  local CTID BACKUP_DIR HONCHO_REF YES MAKE_SNAPSHOT MAKE_BACKUP
+  parse_existing_ctid_args "$@"
+  need_root
+  have pct || die "pct not found. Are you on the Proxmox host?"
+  ensure_ct_running "$CTID"
+
+  local stamp host_dir ct_dir
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  host_dir="${BACKUP_DIR%/}/ct-${CTID}-${stamp}"
+  ct_dir="/root/honcho-backups/${stamp}"
+  log "Creating backup directory $host_dir"
+  mkdir -p "$host_dir"
+
+  log "Copying Honcho config files"
+  pct exec "$CTID" -- bash -lc "mkdir -p '$ct_dir' && cp -a /opt/honcho/.env /opt/honcho/docker-compose.yml '$ct_dir'/ 2>/dev/null || true"
+
+  log "Dumping Postgres from Compose database service"
+  if ! pct exec "$CTID" -- bash -lc "cd /opt/honcho && DB_SERVICE=\$(/usr/local/bin/honcho-compose ps --services | grep -E '^(database|postgres|db|postgresql)$' | head -1 || true); if [[ -z \"\$DB_SERVICE\" ]]; then echo 'No database service found' >&2; exit 2; fi; /usr/local/bin/honcho-compose exec -T \"\$DB_SERVICE\" sh -lc 'pg_dumpall -U \"\${POSTGRES_USER:-postgres}\"' > '$ct_dir/postgres.sql'"; then
+    warn "Database dump failed. Config files may still have been copied, but this is not a complete backup."
+  fi
+
+  log "Capturing service metadata"
+  pct exec "$CTID" -- bash -lc "cd /opt/honcho && { git log -1 --oneline || true; git status --short || true; /usr/local/bin/honcho-compose ps || true; } > '$ct_dir/metadata.txt'"
+
+  log "Pulling backup archive to Proxmox host"
+  pct exec "$CTID" -- bash -lc "cd /root/honcho-backups && tar -czf '${stamp}.tar.gz' '${stamp}'"
+  pct pull "$CTID" "/root/honcho-backups/${stamp}.tar.gz" "$host_dir/honcho-backup.tar.gz"
+  pct exec "$CTID" -- bash -lc "rm -rf '$ct_dir' '/root/honcho-backups/${stamp}.tar.gz'"
+
+  log "Backup complete: $host_dir/honcho-backup.tar.gz"
+}
+
+update_main() {
+  local CTID BACKUP_DIR HONCHO_REF YES MAKE_SNAPSHOT MAKE_BACKUP
+  parse_existing_ctid_args "$@"
+  need_root
+  have pct || die "pct not found. Are you on the Proxmox host?"
+  have pvesm || warn "pvesm not found; continuing because pct snapshots may still work."
+  ensure_ct_running "$CTID"
+
+  if [[ "$YES" != true ]]; then
+    cat <<EOF
+This will update Honcho inside CT $CTID.
+
+Planned safety steps:
+  Proxmox snapshot: $MAKE_SNAPSHOT
+  Logical backup:   $MAKE_BACKUP
+  Honcho ref:       $HONCHO_REF
+
+EOF
+    confirm "Proceed with Honcho update?" || die "Aborted."
+  fi
+
+  if [[ "$MAKE_SNAPSHOT" == true ]]; then
+    local snap
+    snap="pre-honcho-update-$(date +%Y%m%d-%H%M%S)"
+    log "Creating Proxmox snapshot $snap"
+    pct snapshot "$CTID" "$snap" || die "Snapshot failed. Re-run with --no-snapshot only if you intentionally accept that risk."
+  fi
+
+  if [[ "$MAKE_BACKUP" == true ]]; then
+    backup_main --ctid "$CTID" --backup-dir "$BACKUP_DIR" --yes
+  fi
+
+  log "Updating Honcho git checkout"
+  pct exec "$CTID" -- bash -lc "set -euo pipefail
+cd /opt/honcho
+printf 'Before: '; git log -1 --oneline || true
+git fetch --all --tags
+if git ls-remote --exit-code --heads origin '$HONCHO_REF' >/dev/null 2>&1; then
+  git checkout -B '$HONCHO_REF' 'origin/$HONCHO_REF'
+else
+  git checkout '$HONCHO_REF'
+fi
+printf 'After:  '; git log -1 --oneline || true
+"
+
+  log "Re-applying LAN API port mapping if docker-compose.yml uses localhost only"
+  pct exec "$CTID" -- bash -lc "python3 - <<'PY'
+from pathlib import Path
+path = Path('/opt/honcho/docker-compose.yml')
+if not path.exists():
+    raise SystemExit(0)
+text = path.read_text()
+repls = {
+    '127.0.0.1:8000:8000': '0.0.0.0:8000:8000',
+    'localhost:8000:8000': '0.0.0.0:8000:8000',
+}
+for old, new in repls.items():
+    text = text.replace(old, new)
+path.write_text(text)
+PY"
+
+  log "Rebuilding/pulling containers"
+  pct exec "$CTID" -- bash -lc "set -euo pipefail
+cd /opt/honcho
+/usr/local/bin/honcho-compose pull || true
+/usr/local/bin/honcho-compose build --pull
+"
+
+  log "Running database migrations"
+  pct exec "$CTID" -- bash -lc "set -euo pipefail
+cd /opt/honcho
+API_SERVICE=\$(/usr/local/bin/honcho-compose ps --services | grep -E '^(api|server|honcho|web)$' | head -1 || true)
+if [[ -z \"\$API_SERVICE\" ]]; then API_SERVICE=api; fi
+/usr/local/bin/honcho-compose run --rm \"\$API_SERVICE\" uv run alembic upgrade head
+"
+
+  log "Restarting Honcho"
+  pct exec "$CTID" -- bash -lc 'systemctl daemon-reload && systemctl restart honcho.service'
+
+  log "Pruning unused Docker images"
+  pct exec "$CTID" -- bash -lc 'docker image prune -f >/dev/null || true'
+
+  status_main --ctid "$CTID" --yes
+}
+
+main() {
+  local cmd="install"
+  if [[ $# -gt 0 ]]; then
+    case "$1" in
+      install|status|backup|update) cmd="$1"; shift ;;
+      -h|--help) usage; return 0 ;;
+      *) cmd="install" ;;
+    esac
+  fi
+
+  case "$cmd" in
+    install) install_main "$@" ;;
+    status) status_main "$@" ;;
+    backup) backup_main "$@" ;;
+    update) update_main "$@" ;;
+  esac
 }
 
 main "$@"
