@@ -12,6 +12,8 @@ Run this on the **Proxmox host as root**.
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)"
 ```
 
+This is convenient, but it executes the mutable `main` branch as root. For a more cautious Proxmox-host workflow, use download-then-run, inspect the script, or pin the raw URL to a reviewed commit/tag.
+
 ### Download-then-run
 
 ```bash
@@ -68,8 +70,16 @@ It includes:
 
 - `/opt/honcho/.env`
 - `/opt/honcho/docker-compose.yml`
-- a Postgres `pg_dumpall` dump when the Compose database service can be found
+- a verified non-empty Postgres `pg_dumpall` dump
 - git/service metadata
+
+Backups contain secrets from `.env`; the helper creates the host backup directory with restrictive permissions and sets the tarball to mode `600`.
+
+By default, backup fails closed if the database dump fails. If you intentionally want a config-only/partial archive, use:
+
+```bash
+./honcho-proxmox-lxc-debian13.sh backup --ctid 606 --allow-partial-backup
+```
 
 ### Update Honcho safely
 
@@ -80,15 +90,17 @@ It includes:
 The update flow is intentionally conservative:
 
 1. start the container if needed
-2. create a Proxmox snapshot named `pre-honcho-update-<timestamp>`
-3. create a logical backup under `/root/honcho-backups`
-4. fetch/update the Honcho git checkout
-5. re-apply LAN API binding if upstream compose is localhost-only
-6. pull/build Docker Compose services
-7. run Alembic migrations
-8. restart `honcho.service`
-9. prune unused Docker images
-10. print status/health output
+2. verify the CTID looks like a Honcho LXC created by this installer
+3. create a Proxmox snapshot named `pre-honcho-update-<timestamp>`
+4. create a logical backup under `/root/honcho-backups`
+5. fetch/update the Honcho git checkout, refusing to proceed if tracked local changes exist
+6. re-apply LAN API binding if upstream compose is localhost-only
+7. pull/build Docker Compose services
+8. stop the API service before running Alembic migrations
+9. restart `honcho.service`
+10. fail the update if the post-update health check fails
+11. prune unused Docker images after health passes
+12. print status/health output
 
 Useful flags:
 
@@ -113,6 +125,7 @@ Only skip safety steps when you mean it:
 - IPv6 is disabled inside the container after creation; it is not passed as a `net0` option.
 - Do not pass secrets on the command line if you can avoid it.
 - Avoid unattended Honcho app updates; use the `update` command so snapshots, backups, migrations, and health checks happen in order.
+- The Honcho app update command intentionally does **not** run `apt upgrade`; OS package maintenance should be a separate maintenance window with its own snapshot/backup/reboot plan.
 
 ## Hermes hookup
 
