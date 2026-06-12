@@ -2,9 +2,11 @@
 set -Eeuo pipefail
 
 # Honcho Proxmox LXC installer
+# Independent community helper; not an official Honcho or Proxmox project.
 # - prefers Debian 13 (Trixie)
 # - auto-detects sensible Proxmox defaults when possible
 # - installs Honcho via Docker Compose in its own LXC
+# - enables Honcho auth by default when exposing the API on the LXC network
 #
 # Run this on the Proxmox host as root.
 
@@ -45,10 +47,15 @@ Install options:
   --ssh-pubkey FILE         Install SSH public key
   --honcho-repo URL         Honcho repo URL (default: upstream Honcho)
   --honcho-ref REF          Git ref/branch/tag (default: main)
-  --auth                    Enable Honcho auth (JWT secret generated)
-  --no-auth                 Disable Honcho auth (default)
-  --yes                     Skip confirmation prompt
+  --auth                    Enable Honcho auth (default; JWT secret generated)
+  --no-auth                 Disable Honcho auth (trusted LAN only)
+  --yes                     Skip confirmation prompt; requires --ctid and a provider key env var
   --dry-run                 Print planned actions without changing anything
+
+Provider key environment variables for install:
+  HONCHO_LLM_OPENAI_API_KEY / LLM_OPENAI_API_KEY
+  HONCHO_LLM_ANTHROPIC_API_KEY / LLM_ANTHROPIC_API_KEY
+  HONCHO_LLM_GEMINI_API_KEY / LLM_GEMINI_API_KEY
 
 Maintenance options:
   --ctid ID                 Existing Honcho container ID
@@ -59,10 +66,11 @@ Maintenance options:
   --yes                     Skip maintenance confirmation prompts
   -h, --help                Show this help
 
-After creation, the script prints the Honcho URL. In Hermes, run:
-  hermes memory setup
+After creation, the script prints the Honcho URL and, when auth is enabled,
+an admin JWT. In Hermes, run:
+  hermes honcho setup
 
-Then choose Honcho and point it at that URL.
+Choose local/self-hosted Honcho, point it at that URL, and provide the JWT if auth is enabled.
 EOF
 }
 
@@ -78,6 +86,30 @@ rand_password() {
   else
     tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24
   fi
+}
+
+create_admin_jwt() {
+  local secret="$1"
+  python3 - "$secret" <<'PY'
+import base64
+import hashlib
+import hmac
+import json
+import sys
+
+secret = sys.argv[1].encode("utf-8")
+
+def b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+header = {"alg": "HS256", "typ": "JWT"}
+payload = {"t": "", "ad": True}
+header_b64 = b64url(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+payload_b64 = b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+sig = hmac.new(secret, signing_input, hashlib.sha256).digest()
+print(f"{header_b64}.{payload_b64}.{b64url(sig)}")
+PY
 }
 
 auto_bridge() {
@@ -219,10 +251,10 @@ install_main() {
   local SSH_PUBKEY_FILE=""
   local HONCHO_REPO="https://github.com/plastic-labs/honcho.git"
   local HONCHO_REF="main"
-  local ANTHROPIC_KEY=""
-  local OPENAI_KEY=""
-  local GEMINI_KEY=""
-  local ENABLE_AUTH="false"
+  local ANTHROPIC_KEY="${HONCHO_LLM_ANTHROPIC_API_KEY:-${LLM_ANTHROPIC_API_KEY:-}}"
+  local OPENAI_KEY="${HONCHO_LLM_OPENAI_API_KEY:-${LLM_OPENAI_API_KEY:-}}"
+  local GEMINI_KEY="${HONCHO_LLM_GEMINI_API_KEY:-${LLM_GEMINI_API_KEY:-}}"
+  local ENABLE_AUTH="true"
   local YES="false"
   local DRY_RUN="false"
 
@@ -297,7 +329,14 @@ install_main() {
   local TEMPLATE
   TEMPLATE="$(auto_template)"
 
+  if [[ "$ENABLE_AUTH" == true ]]; then
+    have python3 || die "python3 is required to generate a Honcho admin JWT when auth is enabled."
+  fi
+
   if [[ "$DRY_RUN" != true && -z "$ANTHROPIC_KEY$OPENAI_KEY$GEMINI_KEY" ]]; then
+    if [[ "$YES" == true ]]; then
+      die "At least one Honcho LLM provider key is required. For --yes, set HONCHO_LLM_OPENAI_API_KEY, HONCHO_LLM_ANTHROPIC_API_KEY, or HONCHO_LLM_GEMINI_API_KEY in the environment."
+    fi
     warn "No LLM API key provided. Honcho needs at least one provider key."
     read -rsp "Anthropic API key (optional): " ANTHROPIC_KEY; printf '\n' || true
     read -rsp "OpenAI API key (optional): " OPENAI_KEY; printf '\n' || true
@@ -419,10 +458,17 @@ PY
 cp -f .env.template .env
 ' bash "$HONCHO_REF" "$HONCHO_REPO"
 
+  local AUTH_JWT_SECRET=""
+  local HONCHO_ADMIN_JWT=""
+  if [[ "$ENABLE_AUTH" == true ]]; then
+    AUTH_JWT_SECRET="$(rand_password)$(rand_password)"
+    HONCHO_ADMIN_JWT="$(create_admin_jwt "$AUTH_JWT_SECRET")"
+  fi
+
   local ENV_APPEND
   ENV_APPEND=$'\n# Added by honcho-proxmox-lxc-debian13.sh\nSENTRY_ENABLED=false\nAUTH_USE_AUTH='"$ENABLE_AUTH"$'\n'
   if [[ "$ENABLE_AUTH" == true ]]; then
-    ENV_APPEND+=$'AUTH_JWT_SECRET='"$(rand_password)$(rand_password)"$'\n'
+    ENV_APPEND+=$'AUTH_JWT_SECRET='"$AUTH_JWT_SECRET"$'\n'
   fi
   [[ -n "$ANTHROPIC_KEY" ]] && ENV_APPEND+=$'LLM_ANTHROPIC_API_KEY='"$ANTHROPIC_KEY"$'\n'
   [[ -n "$OPENAI_KEY" ]] && ENV_APPEND+=$'LLM_OPENAI_API_KEY='"$OPENAI_KEY"$'\n'
@@ -462,20 +508,45 @@ systemctl restart honcho.service
   CT_IP="$(pct exec "$CTID" -- bash -lc "hostname -I | awk '{print \$1}'" 2>/dev/null || true)"
   [[ -n "$CT_IP" ]] || CT_IP="<container-ip>"
 
-  cat <<EOF
+  if [[ "$ENABLE_AUTH" == true ]]; then
+    cat <<EOF
 
 Honcho LXC is up.
 
 Container ID: $CTID
 URL:          http://$CT_IP:8000
-Auth:         $ENABLE_AUTH
+Auth:         enabled
+Admin JWT:    $HONCHO_ADMIN_JWT
+
+Save the Admin JWT somewhere secure. It is shown only at install time and is
+needed by clients such as Hermes when connecting to an authenticated local Honcho.
 
 Hermes hookup:
-  1. In the Hermes LXC run: hermes memory setup
-  2. Choose Honcho
+  1. In the Hermes LXC run: hermes honcho setup
+  2. Choose local/self-hosted Honcho
   3. Point it at: http://$CT_IP:8000
+  4. Paste the Admin JWT when asked for a local JWT / bearer token
 
 EOF
+  else
+    cat <<EOF
+
+Honcho LXC is up.
+
+Container ID: $CTID
+URL:          http://$CT_IP:8000
+Auth:         disabled
+
+WARNING: Auth is disabled. Keep this API on a trusted private network only.
+
+Hermes hookup:
+  1. In the Hermes LXC run: hermes honcho setup
+  2. Choose local/self-hosted Honcho
+  3. Point it at: http://$CT_IP:8000
+  4. Leave the local JWT / bearer token blank
+
+EOF
+  fi
 }
 
 
