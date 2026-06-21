@@ -61,24 +61,24 @@ If you intentionally want a trusted-LAN/no-auth deployment, pass `--no-auth`. Do
 
 ## Unified install/update runner
 
-Run the same one-liner on the Proxmox host for install, update, status, or backup. With no arguments it opens an interactive menu:
+Run the main script directly from GitHub on the Proxmox host for install, update, status, or backup. With no arguments it opens an interactive menu:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/honcho-proxmox-lxc-debian13.sh)"
 ```
 
-You can also call a subcommand directly through the same one-liner:
+You can also call a subcommand directly through the same command:
 
 ```bash
 # Install a new Honcho LXC
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)" -- install
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/honcho-proxmox-lxc-debian13.sh)" -- install
 
 # Update an existing Honcho LXC
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)" -- update --ctid {CTID}
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/honcho-proxmox-lxc-debian13.sh)" -- update --ctid {CTID}
 
 # Show status or create a backup
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)" -- status --ctid {CTID}
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)" -- backup --ctid {CTID}
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/honcho-proxmox-lxc-debian13.sh)" -- status --ctid {CTID}
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/honcho-proxmox-lxc-debian13.sh)" -- backup --ctid {CTID}
 ```
 
 This is convenient, but it executes the mutable `main` branch as root. For a more cautious Proxmox-host workflow, use download-then-run, inspect the script, or pin the raw URL to a reviewed commit/tag.
