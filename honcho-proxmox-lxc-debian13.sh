@@ -872,7 +872,12 @@ cd /opt/honcho
 API_SERVICE=$(/usr/local/bin/honcho-compose config --services | grep -E "^(api|server|honcho|web)$" | head -1 || true)
 if [[ -z "$API_SERVICE" ]]; then API_SERVICE=api; fi
 /usr/local/bin/honcho-compose stop "$API_SERVICE" || true
-/usr/local/bin/honcho-compose run --rm "$API_SERVICE" uv run alembic upgrade head
+# The api image entrypoint (sh docker/entrypoint.sh) always runs migrations and
+# then starts the server, ignoring any command passed to it - so a plain
+# "compose run ... <cmd>" never returns and the update hangs. Override the
+# entrypoint to run only the migration (scripts/provision_db.py, the very step
+# the entrypoint runs) so it migrates and exits.
+/usr/local/bin/honcho-compose run --rm --entrypoint /app/.venv/bin/python "$API_SERVICE" scripts/provision_db.py
 '
 
   log "Restarting Honcho"
