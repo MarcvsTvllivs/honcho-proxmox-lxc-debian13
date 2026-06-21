@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Community-scripts-style bootstrapper.
+# One-line bootstrapper.
 # This file is meant to be fetched and evaluated with `bash -c "$(curl ...)"`
 # so the interactive installer runs on a real terminal.
 

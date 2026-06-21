@@ -11,7 +11,7 @@ This repository provides a Bash installer/maintenance helper that:
 - exposes the Honcho API on the container's LAN address on port `8000`,
 - provides `status`, `backup`, and conservative `update` commands.
 
-> This is an independent community helper, not an official Honcho or Proxmox project.
+> This is an independent install and update script, not an official Honcho or Proxmox project.
 
 ## Requirements
 
@@ -61,7 +61,7 @@ If you intentionally want a trusted-LAN/no-auth deployment, pass `--no-auth`. Do
 
 ## Install
 
-### Community-scripts-style one-liner
+### One-line installer
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)"

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Honcho Proxmox LXC installer
-# Independent community helper; not an official Honcho or Proxmox project.
+# Independent install and update script; not an official Honcho or Proxmox project.
 # - prefers Debian 13 (Trixie)
 # - auto-detects sensible Proxmox defaults when possible
 # - installs Honcho via Docker Compose in its own LXC
