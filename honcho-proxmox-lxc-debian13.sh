@@ -18,7 +18,8 @@ Usage:
   honcho-proxmox-lxc-debian13.sh backup --ctid ID [--backup-dir DIR] [--allow-partial-backup]
   honcho-proxmox-lxc-debian13.sh update --ctid ID [--honcho-ref REF] [--no-snapshot] [--no-backup] [--yes]
 
-With no subcommand, install is assumed for backward compatibility.
+With no subcommand, an interactive menu asks whether to install, update, show status,
+or create a backup. In non-interactive use, install is assumed for backward compatibility.
 
 Creates and maintains a dedicated Proxmox LXC for Honcho. Install creates the
 LXC, installs Docker, clones Honcho, and starts it under systemd. Status, backup,
@@ -615,6 +616,14 @@ parse_existing_ctid_args() {
       *) die "Unknown argument: $1" ;;
     esac
   done
+  if [[ -z "$CTID" ]]; then
+    if [[ "$YES" == true ]]; then
+      die "Please provide --ctid when using --yes."
+    fi
+    if [[ -t 0 ]]; then
+      read -rp "Existing Honcho LXC CTID: " CTID
+    fi
+  fi
   [[ -n "$CTID" ]] || die "Please provide --ctid for maintenance commands."
 }
 
@@ -821,14 +830,47 @@ if [[ -z "$API_SERVICE" ]]; then API_SERVICE=api; fi
   status_main --ctid "$CTID" --yes
 }
 
+choose_command() {
+  local choice
+  cat >&2 <<'EOF'
+Honcho Proxmox LXC
+
+What do you want to do?
+  1) Install a new Honcho LXC
+  2) Update an existing Honcho LXC
+  3) Show status for an existing Honcho LXC
+  4) Create a backup for an existing Honcho LXC
+  q) Quit
+EOF
+  while true; do
+    read -rp "Select an option [1-4/q]: " choice
+    case "$choice" in
+      1|install|Install) printf 'install'; return 0 ;;
+      2|update|Update) printf 'update'; return 0 ;;
+      3|status|Status) printf 'status'; return 0 ;;
+      4|backup|Backup) printf 'backup'; return 0 ;;
+      q|Q|quit|Quit|exit|Exit) exit 0 ;;
+      *) warn "Please choose 1, 2, 3, 4, or q." ;;
+    esac
+  done
+}
+
 main() {
-  local cmd="install"
+  local cmd=""
   if [[ $# -gt 0 ]]; then
     case "$1" in
       install|status|backup|update) cmd="$1"; shift ;;
       -h|--help) usage; return 0 ;;
       *) cmd="install" ;;
     esac
+  fi
+
+  if [[ -z "$cmd" ]]; then
+    if [[ -t 0 && -t 1 ]]; then
+      cmd="$(choose_command)"
+    else
+      cmd="install"
+    fi
   fi
 
   case "$cmd" in

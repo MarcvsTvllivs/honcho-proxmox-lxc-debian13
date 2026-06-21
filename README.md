@@ -59,17 +59,31 @@ If you intentionally want a trusted-LAN/no-auth deployment, pass `--no-auth`. Do
 | Honcho ref | `main` | Override with `--honcho-ref` |
 | Honcho auth | Enabled | Disable only with `--no-auth` |
 
-## Install
+## Unified install/update runner
 
-### One-line installer
+Run the same one-liner on the Proxmox host for install, update, status, or backup. With no arguments it opens an interactive menu:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)"
 ```
 
+You can also call a subcommand directly through the same one-liner:
+
+```bash
+# Install a new Honcho LXC
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)" -- install
+
+# Update an existing Honcho LXC
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)" -- update --ctid {CTID}
+
+# Show status or create a backup
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)" -- status --ctid {CTID}
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/install.sh)" -- backup --ctid {CTID}
+```
+
 This is convenient, but it executes the mutable `main` branch as root. For a more cautious Proxmox-host workflow, use download-then-run, inspect the script, or pin the raw URL to a reviewed commit/tag.
 
-### Download-then-run
+## Download-then-run
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/honcho-proxmox-lxc-debian13.sh -o honcho-proxmox-lxc-debian13.sh
@@ -77,11 +91,7 @@ chmod +x honcho-proxmox-lxc-debian13.sh
 ./honcho-proxmox-lxc-debian13.sh install
 ```
 
-With no subcommand, `install` is assumed for backward compatibility:
-
-```bash
-./honcho-proxmox-lxc-debian13.sh
-```
+With no subcommand and a real terminal, the script opens the same install/update/status/backup menu. In non-interactive use, `install` is assumed for backward compatibility.
 
 ### Non-interactive install
 
@@ -112,14 +122,7 @@ Avoid passing provider keys as command-line arguments because command lines can 
 
 ## Maintenance
 
-Download the helper on the Proxmox host if you do not already have it:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MarcvsTvllivs/honcho-proxmox-lxc-debian13/main/honcho-proxmox-lxc-debian13.sh -o honcho-proxmox-lxc-debian13.sh
-chmod +x honcho-proxmox-lxc-debian13.sh
-```
-
-Replace `{CTID}` below with your Honcho LXC container ID.
+Use the unified runner above, or download the helper once and run it locally. Replace `{CTID}` below with your Honcho LXC container ID.
 
 ### Check status
 
