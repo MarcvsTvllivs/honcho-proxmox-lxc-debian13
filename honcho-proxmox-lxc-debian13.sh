@@ -67,10 +67,7 @@ Maintenance options:
   -h, --help                Show this help
 
 After creation, the script prints the Honcho URL and, when auth is enabled,
-an admin JWT. In Hermes, run:
-  hermes honcho setup
-
-Choose local/self-hosted Honcho, point it at that URL, and provide the JWT if auth is enabled.
+an admin JWT. Configure your Honcho client/integration to use that URL and JWT.
 EOF
 }
 
@@ -548,13 +545,12 @@ Auth:         enabled
 Admin JWT:    $HONCHO_ADMIN_JWT
 
 Save the Admin JWT somewhere secure. It is shown only at install time and is
-needed by clients such as Hermes when connecting to an authenticated local Honcho.
+needed by clients when connecting to an authenticated local Honcho.
 
-Hermes hookup:
-  1. In the Hermes LXC run: hermes honcho setup
-  2. Choose local/self-hosted Honcho
-  3. Point it at: http://$CT_IP:8000
-  4. Paste the Admin JWT when asked for a local JWT / bearer token
+Client setup:
+  1. Configure your Honcho client or integration for local/self-hosted Honcho
+  2. Point it at: http://$CT_IP:8000
+  3. Use the Admin JWT as the bearer token / API token
 
 EOF
   else
@@ -568,11 +564,10 @@ Auth:         disabled
 
 WARNING: Auth is disabled. Keep this API on a trusted private network only.
 
-Hermes hookup:
-  1. In the Hermes LXC run: hermes honcho setup
-  2. Choose local/self-hosted Honcho
-  3. Point it at: http://$CT_IP:8000
-  4. Leave the local JWT / bearer token blank
+Client setup:
+  1. Configure your Honcho client or integration for local/self-hosted Honcho
+  2. Point it at: http://$CT_IP:8000
+  3. Leave the bearer token / API token unset
 
 EOF
   fi

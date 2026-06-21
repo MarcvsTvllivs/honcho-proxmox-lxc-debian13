@@ -199,22 +199,15 @@ Only skip safety steps when you mean it:
 ./honcho-proxmox-lxc-debian13.sh update --ctid {CTID} --no-backup
 ```
 
-## Hermes hookup
+## Client setup
 
-After install/update, from the Hermes LXC run:
-
-```bash
-hermes honcho setup
-hermes honcho status
-```
-
-Choose a local/self-hosted Honcho deployment and point Hermes at the URL printed by the installer/status command, usually:
+After install/update, configure your Honcho client or integration to use the URL printed by the installer/status command, usually:
 
 ```text
 http://<honcho-lxc-ip>:8000
 ```
 
-If you kept the default authenticated deployment, paste the printed Honcho admin JWT when `hermes honcho setup` asks for a local JWT / bearer token.
+If you kept the default authenticated deployment, use the printed Honcho admin JWT as the client's bearer token / API token. If you installed with `--no-auth`, leave the token unset and keep the API on a trusted private network only.
 
 ## Notes
 
