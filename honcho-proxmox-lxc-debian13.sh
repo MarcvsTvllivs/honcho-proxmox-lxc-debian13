@@ -78,6 +78,11 @@ die() { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Guard a value-taking flag: pass the remaining args ("$@") so $# reflects how
+# many are left. Dies with a friendly message instead of a set -u crash when the
+# flag is the last token and its value is missing.
+require_arg() { [[ $# -ge 2 ]] || die "Option '$1' requires a value."; }
+
 rand_password() {
   if have openssl; then
     openssl rand -base64 24 | tr -d '=+/\n' | cut -c1-24
@@ -274,7 +279,7 @@ install_cleanup_on_error() {
 
 install_main() {
   local CTID=""
-  local HOSTNAME="honcho"
+  local CT_HOSTNAME="honcho"
   local BRIDGE=""
   local ROOTFS_STORAGE=""
   local TMPL_STORAGE=""
@@ -298,22 +303,22 @@ install_main() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --ctid) CTID="$2"; shift 2 ;;
-      --hostname) HOSTNAME="$2"; shift 2 ;;
-      --bridge) BRIDGE="$2"; shift 2 ;;
-      --storage) ROOTFS_STORAGE="$2"; shift 2 ;;
-      --tmpl-storage) TMPL_STORAGE="$2"; shift 2 ;;
-      --ip) IPMODE="$2"; shift 2 ;;
-      --gw) GW="$2"; shift 2 ;;
-      --vlan) VLAN_TAG="$2"; shift 2 ;;
-      --cores) CORES="$2"; shift 2 ;;
-      --memory) MEMORY="$2"; shift 2 ;;
-      --swap) SWAP="$2"; shift 2 ;;
-      --disk) DISK="$2"; shift 2 ;;
-      --password) PASSWORD="$2"; shift 2 ;;
-      --ssh-pubkey) SSH_PUBKEY_FILE="$2"; shift 2 ;;
-      --honcho-repo) HONCHO_REPO="$2"; shift 2 ;;
-      --honcho-ref) HONCHO_REF="$2"; shift 2 ;;
+      --ctid) require_arg "$@"; CTID="$2"; shift 2 ;;
+      --hostname) require_arg "$@"; CT_HOSTNAME="$2"; shift 2 ;;
+      --bridge) require_arg "$@"; BRIDGE="$2"; shift 2 ;;
+      --storage) require_arg "$@"; ROOTFS_STORAGE="$2"; shift 2 ;;
+      --tmpl-storage) require_arg "$@"; TMPL_STORAGE="$2"; shift 2 ;;
+      --ip) require_arg "$@"; IPMODE="$2"; shift 2 ;;
+      --gw) require_arg "$@"; GW="$2"; shift 2 ;;
+      --vlan) require_arg "$@"; VLAN_TAG="$2"; shift 2 ;;
+      --cores) require_arg "$@"; CORES="$2"; shift 2 ;;
+      --memory) require_arg "$@"; MEMORY="$2"; shift 2 ;;
+      --swap) require_arg "$@"; SWAP="$2"; shift 2 ;;
+      --disk) require_arg "$@"; DISK="$2"; shift 2 ;;
+      --password) require_arg "$@"; PASSWORD="$2"; shift 2 ;;
+      --ssh-pubkey) require_arg "$@"; SSH_PUBKEY_FILE="$2"; shift 2 ;;
+      --honcho-repo) require_arg "$@"; HONCHO_REPO="$2"; shift 2 ;;
+      --honcho-ref) require_arg "$@"; HONCHO_REF="$2"; shift 2 ;;
       --auth) ENABLE_AUTH="true"; shift ;;
       --no-auth) ENABLE_AUTH="false"; shift ;;
       --yes) YES="true"; shift ;;
@@ -394,7 +399,7 @@ install_main() {
 
   log "Detected/selected defaults"
   printf '  CTID:             %s\n' "$CTID"
-  printf '  Hostname:         %s\n' "$HOSTNAME"
+  printf '  Hostname:         %s\n' "$CT_HOSTNAME"
   printf '  Bridge:           %s\n' "$BRIDGE"
   printf '  Root storage:     %s\n' "$ROOTFS_STORAGE"
   printf '  Template storage:  %s\n' "$TMPL_STORAGE"
@@ -429,7 +434,7 @@ install_main() {
   local FEATURES="nesting=1,keyctl=1"
   local CREATE_ARGS=(
     create "$CTID" "${TMPL_STORAGE}:vztmpl/${TEMPLATE}"
-    --hostname "$HOSTNAME"
+    --hostname "$CT_HOSTNAME"
     --ostype debian
     --unprivileged 1
     --features "$FEATURES"
@@ -486,12 +491,19 @@ ref="$1"
 repo="$2"
 mkdir -p /opt
 if [[ ! -d /opt/honcho/.git ]]; then
-  git clone --branch "$ref" --depth 1 -- "$repo" /opt/honcho
+  if ! git clone --branch "$ref" --depth 1 -- "$repo" /opt/honcho 2>/dev/null; then
+    # git clone --branch only accepts a branch or tag name; fall back so a raw
+    # commit SHA also works, matching the refs accepted by the update command.
+    rm -rf /opt/honcho
+    git init -q /opt/honcho
+    git -C /opt/honcho remote add origin "$repo"
+    git -C /opt/honcho fetch --depth 1 origin "$ref"
+    git -C /opt/honcho checkout --detach FETCH_HEAD
+  fi
 else
   cd /opt/honcho
   git fetch --depth 1 origin "$ref"
-  git checkout "$ref"
-  git pull --ff-only
+  git checkout --detach FETCH_HEAD
 fi
 cd /opt/honcho
 cp -f docker-compose.yml.example docker-compose.yml
@@ -647,9 +659,9 @@ parse_existing_ctid_args() {
   ALLOW_PARTIAL_BACKUP="false"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --ctid) CTID="$2"; shift 2 ;;
-      --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
-      --honcho-ref) HONCHO_REF="$2"; shift 2 ;;
+      --ctid) require_arg "$@"; CTID="$2"; shift 2 ;;
+      --backup-dir) require_arg "$@"; BACKUP_DIR="$2"; shift 2 ;;
+      --honcho-ref) require_arg "$@"; HONCHO_REF="$2"; shift 2 ;;
       --yes) YES="true"; shift ;;
       --no-snapshot) MAKE_SNAPSHOT="false"; shift ;;
       --no-backup) MAKE_BACKUP="false"; shift ;;
