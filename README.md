@@ -6,7 +6,7 @@ This repository provides a Bash installer/maintenance helper that:
 
 - creates an unprivileged Debian 13 LXC for Honcho,
 - enables the LXC features needed for Docker-in-LXC,
-- installs Docker and Docker Compose inside the container,
+- installs Docker and a modern standalone Docker Compose binary inside the container,
 - clones upstream Honcho and starts it via `honcho.service`,
 - exposes the Honcho API on the container's LAN address on port `8000`,
 - provides `status`, `backup`, and conservative `update` commands.
@@ -31,7 +31,8 @@ By default, the installer:
 - creates an unprivileged LXC,
 - binds the Honcho API to the container network interface (`0.0.0.0:8000` inside Docker Compose) so other LXCs can reach it,
 - enables Honcho authentication and prints an admin JWT for client setup,
-- stores Honcho provider API keys inside `/opt/honcho/.env` in the LXC.
+- stores Honcho provider API keys inside `/opt/honcho/.env` in the LXC,
+- expects an OpenAI-compatible API key for the default upstream Honcho configuration, because the bundled defaults use OpenAI-compatible chat and embedding models.
 
 Treat the printed Honcho admin JWT and the LXC's `/opt/honcho/.env` as secrets.
 
@@ -84,19 +85,19 @@ With no subcommand, `install` is assumed for backward compatibility:
 
 ### Non-interactive install
 
-`--yes` skips confirmation prompts but still requires enough information to avoid guessing important values. Provide at least `--ctid` and preseed one Honcho LLM provider key through the environment:
+`--yes` skips confirmation prompts but still requires enough information to avoid guessing important values. Provide at least `--ctid` and preseed an OpenAI-compatible provider key through the environment. Honcho's default self-host config uses OpenAI-compatible chat and embedding models:
 
 ```bash
-export HONCHO_LLM_OPENAI_API_KEY='sk-...'
+export HONCHO_LLM_OPENAI_API_KEY='<openai-compatible-api-key>'
 ./honcho-proxmox-lxc-debian13.sh install --yes --ctid {CTID}
 ```
 
 Supported key environment variables:
 
 ```text
-HONCHO_LLM_OPENAI_API_KEY
-HONCHO_LLM_ANTHROPIC_API_KEY
-HONCHO_LLM_GEMINI_API_KEY
+HONCHO_LLM_OPENAI_API_KEY      # required for the default config
+HONCHO_LLM_ANTHROPIC_API_KEY  # optional, for custom Honcho model routing
+HONCHO_LLM_GEMINI_API_KEY     # optional, for custom Honcho model routing
 ```
 
 The script also accepts upstream-style aliases if already set:
@@ -176,7 +177,7 @@ The update flow is intentionally conservative:
 4. create a logical backup under `/root/honcho-backups`,
 5. fetch/update the Honcho git checkout, refusing to proceed if tracked local changes exist,
 6. re-apply LAN API binding if upstream compose is localhost-only,
-7. pull/build Docker Compose services,
+7. ensure a modern Docker Compose is available, refresh `docker-compose.yml` from upstream `docker-compose.yml.example`, then pull/build Docker Compose services,
 8. stop the API service before running Alembic migrations,
 9. restart `honcho.service`,
 10. fail the update if the post-update health check fails,
@@ -223,7 +224,7 @@ If you kept the default authenticated deployment, paste the printed Honcho admin
 - Honcho's API is exposed on the container network interface so other LXCs can reach it on port `8000`.
 - IPv6 is disabled inside the container after creation; it is not passed as a `net0` option.
 - Do not pass secrets on the command line if you can avoid it.
-- Avoid unattended Honcho app updates; use the `update` command so snapshots, backups, migrations, and health checks happen in order.
+- Avoid unattended Honcho app updates; use the `update` command so snapshots, backups, compose refresh, migrations, and health checks happen in order.
 - The Honcho app update command intentionally does **not** run `apt upgrade`; OS package maintenance should be a separate maintenance window with its own snapshot/backup/reboot plan.
 
 ## License

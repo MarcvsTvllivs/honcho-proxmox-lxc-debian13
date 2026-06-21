@@ -49,13 +49,13 @@ Install options:
   --honcho-ref REF          Git ref/branch/tag (default: main)
   --auth                    Enable Honcho auth (default; JWT secret generated)
   --no-auth                 Disable Honcho auth (trusted LAN only)
-  --yes                     Skip confirmation prompt; requires --ctid and a provider key env var
+  --yes                     Skip confirmation prompt; requires --ctid and an OpenAI key env var
   --dry-run                 Print planned actions without changing anything
 
 Provider key environment variables for install:
-  HONCHO_LLM_OPENAI_API_KEY / LLM_OPENAI_API_KEY
-  HONCHO_LLM_ANTHROPIC_API_KEY / LLM_ANTHROPIC_API_KEY
-  HONCHO_LLM_GEMINI_API_KEY / LLM_GEMINI_API_KEY
+  HONCHO_LLM_OPENAI_API_KEY / LLM_OPENAI_API_KEY (required for the default config)
+  HONCHO_LLM_ANTHROPIC_API_KEY / LLM_ANTHROPIC_API_KEY (optional)
+  HONCHO_LLM_GEMINI_API_KEY / LLM_GEMINI_API_KEY (optional)
 
 Maintenance options:
   --ctid ID                 Existing Honcho container ID
@@ -234,6 +234,29 @@ curl -fsS http://127.0.0.1:8000/health >/dev/null
 '
 }
 
+ensure_modern_compose_in_ct() {
+  local ctid="$1"
+  local compose_version="v5.1.4"
+  pct exec "$ctid" -- bash -lc 'set -euo pipefail
+version="$1"
+arch="$(uname -m)"
+case "$arch" in
+  x86_64|amd64) asset="docker-compose-linux-x86_64" ;;
+  aarch64|arm64) asset="docker-compose-linux-aarch64" ;;
+  *) echo "Unsupported architecture for Docker Compose standalone binary: $arch" >&2; exit 1 ;;
+esac
+if docker compose version >/dev/null 2>&1; then
+  exit 0
+fi
+url="https://github.com/docker/compose/releases/download/${version}/${asset}"
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL "$url" -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+docker compose version >/dev/null
+' bash "$compose_version"
+}
+
 install_main() {
   local CTID=""
   local HOSTNAME="honcho"
@@ -333,17 +356,21 @@ install_main() {
     have python3 || die "python3 is required to generate a Honcho admin JWT when auth is enabled."
   fi
 
-  if [[ "$DRY_RUN" != true && -z "$ANTHROPIC_KEY$OPENAI_KEY$GEMINI_KEY" ]]; then
+  if [[ "$DRY_RUN" != true && -z "$OPENAI_KEY" ]]; then
     if [[ "$YES" == true ]]; then
-      die "At least one Honcho LLM provider key is required. For --yes, set HONCHO_LLM_OPENAI_API_KEY, HONCHO_LLM_ANTHROPIC_API_KEY, or HONCHO_LLM_GEMINI_API_KEY in the environment."
+      die "HONCHO_LLM_OPENAI_API_KEY or LLM_OPENAI_API_KEY is required with --yes. Honcho's default self-host config uses OpenAI-compatible chat and embedding models."
     fi
-    warn "No LLM API key provided. Honcho needs at least one provider key."
-    read -rsp "Anthropic API key (optional): " ANTHROPIC_KEY; printf '\n' || true
-    read -rsp "OpenAI API key (optional): " OPENAI_KEY; printf '\n' || true
-    read -rsp "Gemini API key (optional): " GEMINI_KEY; printf '\n' || true
+    warn "No OpenAI-compatible API key provided. Honcho's default self-host config requires LLM_OPENAI_API_KEY for chat and embeddings."
+    read -rsp "OpenAI-compatible API key (required): " OPENAI_KEY; printf '\n' || true
   fi
-  if [[ "$DRY_RUN" != true && -z "$ANTHROPIC_KEY$OPENAI_KEY$GEMINI_KEY" ]]; then
-    die "At least one LLM API key is required."
+  if [[ "$DRY_RUN" != true && -z "$OPENAI_KEY" ]]; then
+    die "An OpenAI-compatible API key is required for the default Honcho config."
+  fi
+  if [[ "$DRY_RUN" != true && -z "$ANTHROPIC_KEY" ]]; then
+    read -rsp "Anthropic API key (optional): " ANTHROPIC_KEY; printf '\n' || true
+  fi
+  if [[ "$DRY_RUN" != true && -z "$GEMINI_KEY" ]]; then
+    read -rsp "Gemini API key (optional): " GEMINI_KEY; printf '\n' || true
   fi
 
   log "Detected/selected defaults"
@@ -415,7 +442,9 @@ EOF
 sysctl -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1 net.ipv6.conf.lo.disable_ipv6=1 >/dev/null 2>&1 || true'
 
   log "Installing Docker + dependencies in the container"
-  pct exec "$CTID" -- bash -lc 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl git gnupg lsb-release docker.io docker-compose'
+  pct exec "$CTID" -- bash -lc 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl git gnupg lsb-release docker.io'
+  log "Installing modern Docker Compose in the container"
+  ensure_modern_compose_in_ct "$CTID"
   pct exec "$CTID" -- bash -lc 'cat >/usr/local/bin/honcho-compose <<"EOF"
 #!/usr/bin/env bash
 set -euo pipefail
@@ -741,6 +770,17 @@ else
 fi
 printf "After:  "; git log -1 --oneline || true
 ' bash "$HONCHO_REF"
+
+  log "Ensuring modern Docker Compose is available"
+  ensure_modern_compose_in_ct "$CTID"
+
+  log "Refreshing docker-compose.yml from upstream example"
+  pct exec "$CTID" -- bash -lc 'set -euo pipefail
+cd /opt/honcho
+if [[ -f docker-compose.yml.example ]]; then
+  cp -f docker-compose.yml.example docker-compose.yml
+fi
+'
 
   log "Re-applying LAN API port mapping if docker-compose.yml uses localhost only"
   pct exec "$CTID" -- bash -lc "python3 - <<'PY'
