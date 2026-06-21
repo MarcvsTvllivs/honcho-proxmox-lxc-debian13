@@ -82,11 +82,15 @@ rand_password() {
   if have openssl; then
     openssl rand -base64 24 | tr -d '=+/\n' | cut -c1-24
   else
-    tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24
+    # head closing the pipe early would SIGPIPE tr (exit 141) and trip pipefail.
+    tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24 || true
   fi
 }
 
 create_admin_jwt() {
+  # Mints a Honcho admin token: HS256 over the AUTH_JWT_SECRET with Honcho's
+  # compact admin claims ({"t":"","ad":true}). Mirrors upstream Honcho's auth
+  # scheme; if Honcho changes its JWT claim format this must be updated to match.
   local secret="$1"
   python3 - "$secret" <<'PY'
 import base64
@@ -166,7 +170,7 @@ ensure_template() {
   local storage="$1"
   local template="$2"
   pveam update >/dev/null
-  if pveam list "$storage" 2>/dev/null | awk '{print $1}' | grep -q "$template"; then
+  if pveam list "$storage" 2>/dev/null | awk '{print $1}' | grep -Fq "$template"; then
     return 0
   fi
   log "Downloading template $template into storage $storage"
@@ -234,9 +238,10 @@ curl -fsS http://127.0.0.1:8000/health >/dev/null
 
 ensure_modern_compose_in_ct() {
   local ctid="$1"
-  local compose_version="v5.1.4"
+  # Install the Docker Compose v2 CLI plugin only if the distro package didn't
+  # already provide `docker compose`. Pull the latest release rather than pinning
+  # a version, so this never points at a release tag that doesn't exist.
   pct exec "$ctid" -- bash -lc 'set -euo pipefail
-version="$1"
 arch="$(uname -m)"
 case "$arch" in
   x86_64|amd64) asset="docker-compose-linux-x86_64" ;;
@@ -246,13 +251,25 @@ esac
 if docker compose version >/dev/null 2>&1; then
   exit 0
 fi
-url="https://github.com/docker/compose/releases/download/${version}/${asset}"
+url="https://github.com/docker/compose/releases/latest/download/${asset}"
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -fsSL "$url" -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
 docker compose version >/dev/null
-' bash "$compose_version"
+'
+}
+
+INSTALL_CREATED_CTID=""
+install_cleanup_on_error() {
+  local ec=$?
+  trap - ERR
+  if [[ -n "$INSTALL_CREATED_CTID" ]]; then
+    warn "Install failed (exit code $ec)."
+    warn "A partially-configured container was left behind: CTID $INSTALL_CREATED_CTID"
+    warn "Inspect it with:  pct config $INSTALL_CREATED_CTID"
+    warn "Remove it with:   pct stop $INSTALL_CREATED_CTID && pct destroy $INSTALL_CREATED_CTID"
+  fi
 }
 
 install_main() {
@@ -323,6 +340,10 @@ install_main() {
   if pct list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$CTID"; then
     die "CTID $CTID is already in use."
   fi
+  [[ "$CORES" =~ ^[0-9]+$ ]]  || die "--cores must be a positive integer."
+  [[ "$MEMORY" =~ ^[0-9]+$ ]] || die "--memory must be a positive integer (MB)."
+  [[ "$SWAP" =~ ^[0-9]+$ ]]   || die "--swap must be a positive integer (MB)."
+  [[ "$DISK" =~ ^[0-9]+$ ]]   || die "--disk must be a positive integer (GB)."
 
   local DETECTED_BRIDGE DETECTED_ROOTFS_STORAGE DETECTED_TMPL_STORAGE
   DETECTED_BRIDGE="$(auto_bridge)"
@@ -330,15 +351,15 @@ install_main() {
   DETECTED_TMPL_STORAGE="$(auto_tmpl_storage)"
 
   if [[ "$YES" == true ]]; then
-    BRIDGE="$DETECTED_BRIDGE"
-    ROOTFS_STORAGE="$DETECTED_ROOTFS_STORAGE"
-    TMPL_STORAGE="$DETECTED_TMPL_STORAGE"
-    PASSWORD="$(rand_password)"
+    BRIDGE="${BRIDGE:-$DETECTED_BRIDGE}"
+    ROOTFS_STORAGE="${ROOTFS_STORAGE:-$DETECTED_ROOTFS_STORAGE}"
+    TMPL_STORAGE="${TMPL_STORAGE:-$DETECTED_TMPL_STORAGE}"
+    PASSWORD="${PASSWORD:-$(rand_password)}"
   else
-    prompt_default BRIDGE "Bridge" "$DETECTED_BRIDGE"
-    prompt_default ROOTFS_STORAGE "Rootfs storage" "$DETECTED_ROOTFS_STORAGE"
-    prompt_default TMPL_STORAGE "Template storage" "$DETECTED_TMPL_STORAGE"
-    prompt_secret_default PASSWORD "Root password" "$(rand_password)"
+    prompt_default BRIDGE "Bridge" "${BRIDGE:-$DETECTED_BRIDGE}"
+    prompt_default ROOTFS_STORAGE "Rootfs storage" "${ROOTFS_STORAGE:-$DETECTED_ROOTFS_STORAGE}"
+    prompt_default TMPL_STORAGE "Template storage" "${TMPL_STORAGE:-$DETECTED_TMPL_STORAGE}"
+    prompt_secret_default PASSWORD "Root password" "${PASSWORD:-$(rand_password)}"
   fi
 
   if [[ -f "$SSH_PUBKEY_FILE" ]]; then
@@ -425,8 +446,10 @@ install_main() {
     CREATE_ARGS+=(--ssh-public-keys "$SSH_PUBKEY_FILE")
   fi
 
+  trap install_cleanup_on_error ERR
   log "Creating container $CTID"
   pct "${CREATE_ARGS[@]}"
+  INSTALL_CREATED_CTID="$CTID"
 
   log "Starting container $CTID"
   pct start "$CTID"
@@ -463,7 +486,7 @@ ref="$1"
 repo="$2"
 mkdir -p /opt
 if [[ ! -d /opt/honcho/.git ]]; then
-  git clone --branch "$ref" --depth 1 "$repo" /opt/honcho
+  git clone --branch "$ref" --depth 1 -- "$repo" /opt/honcho
 else
   cd /opt/honcho
   git fetch --depth 1 origin "$ref"
@@ -476,11 +499,17 @@ python3 - <<'"'"'PY'"'"'
 from pathlib import Path
 path = Path("/opt/honcho/docker-compose.yml")
 text = path.read_text()
-old = "  - \"127.0.0.1:8000:8000\"\n"
-new = "  - \"0.0.0.0:8000:8000\"\n"
-if old not in text:
-    raise SystemExit("Could not find localhost-only Honcho API port mapping in docker-compose.yml")
-path.write_text(text.replace(old, new, 1))
+repls = {
+    "127.0.0.1:8000:8000": "0.0.0.0:8000:8000",
+    "localhost:8000:8000": "0.0.0.0:8000:8000",
+}
+new_text = text
+for old, new in repls.items():
+    new_text = new_text.replace(old, new)
+if new_text != text:
+    path.write_text(new_text)
+elif "0.0.0.0:8000:8000" not in new_text:
+    raise SystemExit("Could not find a Honcho API port mapping for 8000 to expose on the LAN in docker-compose.yml")
 PY
 cp -f .env.template .env
 ' bash "$HONCHO_REF" "$HONCHO_REPO"
@@ -530,7 +559,20 @@ systemctl enable honcho.service
 systemctl restart honcho.service
 '
 
-  sleep 5
+  log "Waiting for Honcho to become healthy"
+  local i HEALTHY="false"
+  for ((i = 0; i < 30; i++)); do
+    if pct exec "$CTID" -- bash -lc 'curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1'; then
+      HEALTHY="true"; break
+    fi
+    sleep 5
+  done
+  trap - ERR
+  if [[ "$HEALTHY" != true ]]; then
+    warn "Honcho did not pass a health check within the timeout, but the container was created."
+    warn "Check 'systemctl status honcho.service' and '/usr/local/bin/honcho-compose logs' inside CT $CTID."
+  fi
+
   local CT_IP
   CT_IP="$(pct exec "$CTID" -- bash -lc "hostname -I | awk '{print \$1}'" 2>/dev/null || true)"
   [[ -n "$CT_IP" ]] || CT_IP="<container-ip>"
@@ -766,11 +808,14 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   echo "Refusing to update with local tracked changes in /opt/honcho." >&2
   exit 3
 fi
-git fetch --all --tags
+# The install uses a shallow, single-branch clone, so origin/$ref and the
+# objects behind $ref may not exist locally. Fetch the requested ref explicitly
+# and act on FETCH_HEAD, which works for branches and tags at any clone depth.
+git fetch --depth 1 origin "$ref"
 if git ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
-  git checkout -B "$ref" "origin/$ref"
+  git checkout -B "$ref" FETCH_HEAD
 else
-  git checkout --detach "$ref"
+  git checkout --detach FETCH_HEAD
 fi
 printf "After:  "; git log -1 --oneline || true
 ' bash "$HONCHO_REF"
