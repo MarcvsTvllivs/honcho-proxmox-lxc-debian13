@@ -265,6 +265,35 @@ docker compose version >/dev/null
 '
 }
 
+ensure_buildx_in_ct() {
+  local ctid="$1"
+  # Honcho api/deriver images are built from source, and modern Docker Compose
+  # delegates the build to buildx (requires buildx >= 0.17.0). Debian's docker.io
+  # does not ship a new-enough buildx, so install the latest plugin when needed.
+  pct exec "$ctid" -- bash -lc 'set -euo pipefail
+arch="$(uname -m)"
+case "$arch" in
+  x86_64|amd64) bx_arch=amd64 ;;
+  aarch64|arm64) bx_arch=arm64 ;;
+  *) echo "Unsupported architecture for buildx: $arch" >&2; exit 1 ;;
+esac
+have_new=0
+ver="$(docker buildx version 2>/dev/null | grep -oE "v[0-9]+\.[0-9]+\.[0-9]+" | head -1 || true)"
+ver="${ver#v}"
+if [ -n "$ver" ] && [ "$(printf "%s\n0.17.0\n" "$ver" | sort -V | head -1)" = "0.17.0" ]; then
+  have_new=1
+fi
+if [ "$have_new" = "0" ]; then
+  url="$(curl -fsSLI -o /dev/null -w "%{url_effective}" https://github.com/docker/buildx/releases/latest)"
+  tag="${url##*/tag/}"
+  mkdir -p /usr/local/lib/docker/cli-plugins
+  curl -fsSL "https://github.com/docker/buildx/releases/download/${tag}/buildx-${tag}.linux-${bx_arch}" -o /usr/local/lib/docker/cli-plugins/docker-buildx
+  chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+fi
+docker buildx version >/dev/null
+'
+}
+
 INSTALL_CREATED_CTID=""
 install_cleanup_on_error() {
   local ec=$?
@@ -471,6 +500,8 @@ sysctl -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1 
   pct exec "$CTID" -- bash -lc 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl git gnupg lsb-release docker.io'
   log "Installing modern Docker Compose in the container"
   ensure_modern_compose_in_ct "$CTID"
+  log "Ensuring buildx is available for building Honcho images"
+  ensure_buildx_in_ct "$CTID"
   pct exec "$CTID" -- bash -lc 'cat >/usr/local/bin/honcho-compose <<"EOF"
 #!/usr/bin/env bash
 set -euo pipefail
@@ -834,6 +865,8 @@ printf "After:  "; git log -1 --oneline || true
 
   log "Ensuring modern Docker Compose is available"
   ensure_modern_compose_in_ct "$CTID"
+  log "Ensuring buildx is available for building Honcho images"
+  ensure_buildx_in_ct "$CTID"
 
   log "Refreshing docker-compose.yml from upstream example"
   pct exec "$CTID" -- bash -lc 'set -euo pipefail
