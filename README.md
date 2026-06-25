@@ -6,7 +6,7 @@ This repository provides a Bash installer/maintenance helper that:
 
 - creates an unprivileged Debian 13 LXC for Honcho,
 - enables the LXC features needed for Docker-in-LXC,
-- installs Docker and a modern standalone Docker Compose binary inside the container,
+- installs Docker plus current standalone Docker Compose and buildx plugins inside the container (Honcho's images are built from source, which needs buildx >= 0.17.0),
 - clones upstream Honcho and starts it via `honcho.service`,
 - exposes the Honcho API on the container's LAN address on port `8000`,
 - provides `status`, `backup`, and conservative `update` commands.
@@ -216,6 +216,7 @@ If you kept the default authenticated deployment, use the printed Honcho admin J
 
 - Run this on the Proxmox host as root.
 - The install command prompts interactively for required values.
+- Install asks whether to start Honcho immediately. Choose **no** (or pass `--no-start`) to create the LXC without starting Honcho, so you can edit `/opt/honcho/.env` (e.g. model config) before the first start; then start it with `pct exec <CTID> -- systemctl start honcho.service`.
 - CTID, bridge, rootfs storage, template storage, and root password are prompted unless supplied explicitly or generated.
 - Honcho's API is exposed on the container network interface so other LXCs can reach it on port `8000`.
 - IPv6 is disabled inside the container after creation; it is not passed as a `net0` option.

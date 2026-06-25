@@ -50,6 +50,8 @@ Install options:
   --honcho-ref REF          Git ref/branch/tag (default: main)
   --auth                    Enable Honcho auth (default; JWT secret generated)
   --no-auth                 Disable Honcho auth (trusted LAN only)
+  --no-start                Create the LXC but do not start Honcho, so you can
+                            edit /opt/honcho/.env before the first start
   --yes                     Skip confirmation prompt; requires --ctid and an OpenAI key env var
   --dry-run                 Print planned actions without changing anything
 
@@ -327,6 +329,7 @@ install_main() {
   local OPENAI_KEY="${HONCHO_LLM_OPENAI_API_KEY:-${LLM_OPENAI_API_KEY:-}}"
   local GEMINI_KEY="${HONCHO_LLM_GEMINI_API_KEY:-${LLM_GEMINI_API_KEY:-}}"
   local ENABLE_AUTH="true"
+  local AUTO_START="true"
   local YES="false"
   local DRY_RUN="false"
 
@@ -350,6 +353,7 @@ install_main() {
       --honcho-ref) require_arg "$@"; HONCHO_REF="$2"; shift 2 ;;
       --auth) ENABLE_AUTH="true"; shift ;;
       --no-auth) ENABLE_AUTH="false"; shift ;;
+      --no-start) AUTO_START="false"; shift ;;
       --yes) YES="true"; shift ;;
       --dry-run) DRY_RUN="true"; shift ;;
       -h|--help) usage; return 0 ;;
@@ -426,6 +430,12 @@ install_main() {
     read -rsp "Gemini API key (optional): " GEMINI_KEY; printf '\n' || true
   fi
 
+  if [[ "$YES" != true ]]; then
+    local start_ans=""
+    read -rp "Start Honcho now? Choose 'n' to edit /opt/honcho/.env before first start [Y/n]: " start_ans
+    [[ "$start_ans" =~ ^[Nn] ]] && AUTO_START="false"
+  fi
+
   log "Detected/selected defaults"
   printf '  CTID:             %s\n' "$CTID"
   printf '  Hostname:         %s\n' "$CT_HOSTNAME"
@@ -437,6 +447,7 @@ install_main() {
   printf '  Cores/RAM/SWAP:   %s / %sMB / %sMB\n' "$CORES" "$MEMORY" "$SWAP"
   printf '  Disk:             %sGB\n' "$DISK"
   printf '  Auth:             %s\n' "$ENABLE_AUTH"
+  printf '  Auto-start:       %s\n' "$AUTO_START"
 
   if [[ "$DRY_RUN" == true ]]; then
     log "Dry-run only; no changes will be made."
@@ -599,28 +610,58 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable honcho.service
-systemctl restart honcho.service
 '
 
-  log "Waiting for Honcho to become healthy"
-  local i HEALTHY="false"
-  for ((i = 0; i < 30; i++)); do
-    if pct exec "$CTID" -- bash -lc 'curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1'; then
-      HEALTHY="true"; break
+  if [[ "$AUTO_START" == true ]]; then
+    log "Starting Honcho"
+    pct exec "$CTID" -- bash -lc 'systemctl restart honcho.service'
+    log "Waiting for Honcho to become healthy"
+    local i HEALTHY="false"
+    for ((i = 0; i < 30; i++)); do
+      if pct exec "$CTID" -- bash -lc 'curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1'; then
+        HEALTHY="true"; break
+      fi
+      sleep 5
+    done
+    if [[ "$HEALTHY" != true ]]; then
+      warn "Honcho did not pass a health check within the timeout, but the container was created."
+      warn "Check 'systemctl status honcho.service' and '/usr/local/bin/honcho-compose logs' inside CT $CTID."
     fi
-    sleep 5
-  done
-  trap - ERR
-  if [[ "$HEALTHY" != true ]]; then
-    warn "Honcho did not pass a health check within the timeout, but the container was created."
-    warn "Check 'systemctl status honcho.service' and '/usr/local/bin/honcho-compose logs' inside CT $CTID."
+  else
+    log "Honcho installed but not started (you chose to edit .env first)."
   fi
+  trap - ERR
 
   local CT_IP
   CT_IP="$(pct exec "$CTID" -- bash -lc "hostname -I | awk '{print \$1}'" 2>/dev/null || true)"
   [[ -n "$CT_IP" ]] || CT_IP="<container-ip>"
 
-  if [[ "$ENABLE_AUTH" == true ]]; then
+  if [[ "$AUTO_START" != true ]]; then
+    cat <<EOF
+
+Honcho LXC created but NOT started.
+
+Container ID:      $CTID
+URL (after start): http://$CT_IP:8000
+Auth:              $ENABLE_AUTH
+
+Next steps:
+  1. Edit config:   pct exec $CTID -- nano /opt/honcho/.env
+  2. Start Honcho:  pct exec $CTID -- systemctl start honcho.service
+  3. Check health:  pct exec $CTID -- curl -fsS http://127.0.0.1:8000/health
+EOF
+    if [[ "$ENABLE_AUTH" == true ]]; then
+      cat <<EOF
+
+Admin JWT: $HONCHO_ADMIN_JWT
+
+This token matches the AUTH_JWT_SECRET already written to .env. If you change
+that secret while editing, regenerate the token after starting with:
+  pct exec $CTID -- bash -lc 'cd /opt/honcho && /usr/local/bin/honcho-compose run --rm --entrypoint /app/.venv/bin/python api scripts/generate_jwt.py --admin --print-only'
+EOF
+    fi
+    printf '\n'
+  elif [[ "$ENABLE_AUTH" == true ]]; then
     cat <<EOF
 
 Honcho LXC is up.
