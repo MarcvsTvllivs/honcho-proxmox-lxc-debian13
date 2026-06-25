@@ -135,36 +135,39 @@ auto_bridge() {
   fi
 }
 
-auto_tmpl_storage() {
-  local storages
-  storages="$(pvesm status 2>/dev/null | awk 'NR>1 {print $1}')"
-  if grep -qx 'local' <<<"$storages"; then
-    printf 'local'
-    return 0
-  fi
-  local s
-  s="$(awk 'NF{print; exit}' <<<"$storages")"
-  if [[ -n "$s" ]]; then
-    printf '%s' "$s"
-  else
-    printf 'local'
-  fi
+# Names of active storages that support content type $1 (e.g. rootdir, vztmpl).
+storages_with_content() {
+  pvesm status --content "$1" 2>/dev/null | awk 'NR>1 {print $1}' || true
 }
 
 auto_root_storage() {
-  local storages
-  storages="$(pvesm status 2>/dev/null | awk 'NR>1 {print $1}')"
-  if grep -qx 'local-lvm' <<<"$storages"; then
-    printf 'local-lvm'
-    return 0
-  fi
-  local s
-  s="$(awk 'NF{print; exit}' <<<"$storages")"
-  if [[ -n "$s" ]]; then
-    printf '%s' "$s"
-  else
-    printf 'local-lvm'
-  fi
+  # Offer a storage that can actually hold a container root filesystem
+  # ('rootdir' content), preferring the common block backends, so ZFS/LVM
+  # hosts get the right default instead of whatever sorts first.
+  local candidates pref first
+  candidates="$(storages_with_content rootdir)"
+  for pref in local-lvm local-zfs local; do
+    if grep -qx "$pref" <<<"$candidates"; then printf '%s' "$pref"; return 0; fi
+  done
+  first="$(awk 'NF{print; exit}' <<<"$candidates")"
+  printf '%s' "${first:-local-lvm}"
+}
+
+auto_tmpl_storage() {
+  # Offer the storage that already holds a Debian 13 template; otherwise a
+  # template-capable ('vztmpl') storage, preferring 'local'.
+  local candidates st first
+  candidates="$(storages_with_content vztmpl)"
+  while IFS= read -r st; do
+    [[ -n "$st" ]] || continue
+    if pveam list "$st" 2>/dev/null | awk '{print $1}' | grep -q 'debian-13-standard'; then
+      printf '%s' "$st"
+      return 0
+    fi
+  done <<<"$candidates"
+  if grep -qx 'local' <<<"$candidates"; then printf 'local'; return 0; fi
+  first="$(awk 'NF{print; exit}' <<<"$candidates")"
+  printf '%s' "${first:-local}"
 }
 
 auto_template() {

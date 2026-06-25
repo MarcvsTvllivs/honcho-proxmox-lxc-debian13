@@ -46,8 +46,8 @@ If you intentionally want a trusted-LAN/no-auth deployment, pass `--no-auth`. Do
 | CTID | Prompted | Required with `--yes` |
 | Hostname | `honcho` | Override with `--hostname` |
 | Bridge | Auto-detected, fallback `vmbr0` | Prompted interactively |
-| Rootfs storage | Auto-detected, prefers `local-lvm` | Prompted interactively |
-| Template storage | Auto-detected, prefers `local` | Prompted interactively |
+| Rootfs storage | Auto-detected: a `rootdir`-capable storage, prefers `local-lvm`/`local-zfs` | Prompted interactively |
+| Template storage | Auto-detected: where the Debian 13 template already lives, else a `vztmpl`-capable storage (prefers `local`) | Prompted interactively |
 | Network | DHCP IPv4 | Static IP supported with `--ip` and `--gw` |
 | IPv6 | Disabled inside the container | Not passed as a Proxmox `net0` option |
 | Cores | `2` | Override with `--cores` |
