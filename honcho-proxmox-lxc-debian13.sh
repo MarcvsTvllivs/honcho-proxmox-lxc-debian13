@@ -52,9 +52,10 @@ Install options:
   --no-auth                 Disable Honcho auth (trusted LAN only)
   --no-start                Create the LXC but do not start Honcho, so you can
                             edit /opt/honcho/.env before the first start
-  --embedding-dim N         Set EMBEDDING_VECTOR_DIMENSIONS=N and apply it to the
-                            pgvector schema after migrations (default: Honcho's
-                            1536). Needs an embedding model that outputs N dims.
+  --embedding-dim N         Set EMBEDDING_VECTOR_DIMENSIONS=N. Forces a no-start
+                            install so a matching embedding model can be set in
+                            .env; apply it (migrations + configure_embeddings)
+                            before the first start. Default: Honcho's 1536.
   --yes                     Skip confirmation prompt; requires --ctid (and an OpenAI key env var unless --no-start)
   --dry-run                 Print planned actions without changing anything
 
@@ -299,31 +300,6 @@ docker buildx version >/dev/null
 '
 }
 
-bootstrap_embeddings_in_ct() {
-  local ctid="$1" dim="$2"
-  # Apply a non-default embedding dimension. Honcho's migrations create the vector
-  # columns at the default 1536; configure_embeddings.py ALTERs them to the target.
-  # This must run AFTER migrations and BEFORE the API/deriver start (they refuse to
-  # start on a dim mismatch) and only works on empty tables (a fresh install). The
-  # script is passed over stdin so its embedded SQL can use single quotes.
-  pct exec "$ctid" -- bash -s "$dim" <<'INNER'
-set -euo pipefail
-expected="$1"
-cd /opt/honcho
-echo "[embeddings] running migrations"
-/usr/local/bin/honcho-compose run --rm --entrypoint /app/.venv/bin/python api scripts/provision_db.py
-echo "[embeddings] applying EMBEDDING_VECTOR_DIMENSIONS=${expected}"
-/usr/local/bin/honcho-compose run --rm --entrypoint /app/.venv/bin/python api scripts/configure_embeddings.py --yes
-echo "[embeddings] verifying dimension in the database"
-matched="$(/usr/local/bin/honcho-compose exec -T database psql -U postgres -d postgres -tAc "SELECT count(*) FROM pg_attribute a JOIN pg_class c ON a.attrelid = c.oid JOIN pg_namespace nsp ON c.relnamespace = nsp.oid WHERE nsp.nspname = 'public' AND c.relname IN ('documents', 'message_embeddings') AND a.attname = 'embedding' AND a.atttypmod = ${expected};" | tr -d '[:space:]')"
-if [ "${matched:-0}" != "2" ]; then
-  echo "[embeddings] VERIFICATION FAILED: expected documents.embedding and message_embeddings.embedding at vector(${expected}); matched=${matched:-0}" >&2
-  exit 1
-fi
-echo "[embeddings] verified: documents.embedding and message_embeddings.embedding are vector(${expected})"
-INNER
-}
-
 INSTALL_CREATED_CTID=""
 install_cleanup_on_error() {
   local ec=$?
@@ -444,8 +420,21 @@ install_main() {
     have python3 || die "python3 is required to generate a Honcho admin JWT when auth is enabled."
   fi
 
-  # Decide auto-start first: whether an OpenAI key is required now depends on it.
-  if [[ "$YES" != true ]]; then
+  # Embedding dimension is decided first: a non-default dimension forces a no-start
+  # install (a matching embedding model must be set in .env, and the schema altered,
+  # before the first start).
+  if [[ "$YES" != true && -z "$EMBEDDING_DIM" ]]; then
+    read -rp "Embedding vector dimension (blank = Honcho default 1536): " EMBEDDING_DIM
+    [[ -z "$EMBEDDING_DIM" || "$EMBEDDING_DIM" =~ ^[1-9][0-9]*$ ]] || die "Embedding dimension must be a positive integer."
+  fi
+  if [[ -n "$EMBEDDING_DIM" && "$AUTO_START" == true ]]; then
+    AUTO_START="false"
+    warn "Custom embedding dimension set; installing without starting so a matching model can be set in .env first."
+  fi
+
+  # Auto-start (skipped when a custom embedding dim already forced no-start).
+  # Whether an OpenAI key is required now depends on this.
+  if [[ "$YES" != true && "$AUTO_START" == true ]]; then
     local start_ans=""
     read -rp "Start Honcho now? Choose 'n' to edit /opt/honcho/.env before first start [Y/n]: " start_ans
     [[ "$start_ans" =~ ^[Nn] ]] && AUTO_START="false"
@@ -472,10 +461,6 @@ install_main() {
   fi
   if [[ "$DRY_RUN" != true && -z "$GEMINI_KEY" ]]; then
     read -rsp "Gemini API key (optional): " GEMINI_KEY; printf '\n' || true
-  fi
-  if [[ "$YES" != true && -z "$EMBEDDING_DIM" ]]; then
-    read -rp "Embedding vector dimension (blank = Honcho default 1536): " EMBEDDING_DIM
-    [[ -z "$EMBEDDING_DIM" || "$EMBEDDING_DIM" =~ ^[1-9][0-9]*$ ]] || die "Embedding dimension must be a positive integer."
   fi
 
   log "Detected/selected defaults"
@@ -657,10 +642,6 @@ systemctl enable honcho.service
 '
 
   if [[ "$AUTO_START" == true ]]; then
-    if [[ -n "$EMBEDDING_DIM" ]]; then
-      log "Applying and verifying embedding dimension ($EMBEDDING_DIM) before first start"
-      bootstrap_embeddings_in_ct "$CTID" "$EMBEDDING_DIM"
-    fi
     log "Starting Honcho"
     pct exec "$CTID" -- bash -lc 'systemctl restart honcho.service'
     log "Waiting for Honcho to become healthy"
@@ -692,12 +673,32 @@ Honcho LXC created but NOT started.
 Container ID:      $CTID
 URL (after start): http://$CT_IP:8000
 Auth:              $ENABLE_AUTH
+EOF
+    if [[ -n "$EMBEDDING_DIM" ]]; then
+      cat <<EOF
+
+A custom embedding dimension ($EMBEDDING_DIM) was set, so Honcho was left stopped:
+it needs a matching embedding model, and the pgvector schema must be altered before
+the first start. To finish setup:
+  1. Set an embedding model that outputs $EMBEDDING_DIM dimensions in .env
+     (EMBEDDING_MODEL_CONFIG__MODEL, plus __OVERRIDES__BASE_URL for non-OpenAI).
+     EMBEDDING_VECTOR_DIMENSIONS=$EMBEDDING_DIM is already written.
+       pct exec $CTID -- nano /opt/honcho/.env
+  2. Apply the dimension to the empty schema (configure_embeddings prints the
+     result so you can confirm vector($EMBEDDING_DIM)):
+       pct exec $CTID -- bash -lc 'cd /opt/honcho && /usr/local/bin/honcho-compose run --rm --entrypoint /app/.venv/bin/python api scripts/provision_db.py'
+       pct exec $CTID -- bash -lc 'cd /opt/honcho && /usr/local/bin/honcho-compose run --rm --entrypoint /app/.venv/bin/python api scripts/configure_embeddings.py --yes'
+  3. Start: pct exec $CTID -- systemctl start honcho.service
+EOF
+    else
+      cat <<EOF
 
 Next steps:
   1. Edit config:   pct exec $CTID -- nano /opt/honcho/.env
   2. Start Honcho:  pct exec $CTID -- systemctl start honcho.service
   3. Check health:  pct exec $CTID -- curl -fsS http://127.0.0.1:8000/health
 EOF
+    fi
     if [[ "$ENABLE_AUTH" == true ]]; then
       cat <<EOF
 
@@ -706,16 +707,6 @@ Admin JWT: $HONCHO_ADMIN_JWT
 This token matches the AUTH_JWT_SECRET already written to .env. If you change
 that secret while editing, regenerate the token after starting with:
   pct exec $CTID -- bash -lc 'cd /opt/honcho && /usr/local/bin/honcho-compose run --rm --entrypoint /app/.venv/bin/python api scripts/generate_jwt.py --admin --print-only'
-EOF
-    fi
-    if [[ -n "$EMBEDDING_DIM" ]]; then
-      cat <<EOF
-
-Embedding dimension: you set $EMBEDDING_DIM. Migrations create the schema at 1536,
-so a plain start would refuse on the mismatch. Before the FIRST start, apply it:
-  pct exec $CTID -- bash -lc 'cd /opt/honcho && /usr/local/bin/honcho-compose run --rm --entrypoint /app/.venv/bin/python api scripts/provision_db.py'
-  pct exec $CTID -- bash -lc 'cd /opt/honcho && /usr/local/bin/honcho-compose run --rm --entrypoint /app/.venv/bin/python api scripts/configure_embeddings.py --yes'
-Then start with step 2 above.
 EOF
     fi
     printf '\n'

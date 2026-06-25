@@ -58,7 +58,7 @@ If you intentionally want a trusted-LAN/no-auth deployment, pass `--no-auth`. Do
 | LXC features | `nesting=1,keyctl=1` | Needed for Docker-in-LXC |
 | Honcho ref | `main` | Override with `--honcho-ref` |
 | Honcho auth | Enabled | Disable only with `--no-auth` |
-| Embedding dim | Honcho default (1536) | Override with `--embedding-dim N`; applied to pgvector after migrations and verified |
+| Embedding dim | Honcho default (1536) | Override with `--embedding-dim N` (forces a no-start install) |
 
 ## Unified install/update runner
 
@@ -218,7 +218,7 @@ If you kept the default authenticated deployment, use the printed Honcho admin J
 - Run this on the Proxmox host as root.
 - The install command prompts interactively for required values.
 - Install asks whether to start Honcho immediately. Choose **no** (or pass `--no-start`) to create the LXC without starting Honcho, so you can edit `/opt/honcho/.env` (e.g. model config) before the first start; then start it with `pct exec <CTID> -- systemctl start honcho.service`.
-- To use a non-default embedding size, set `--embedding-dim N` (or answer the prompt). On the auto-start path the installer writes `EMBEDDING_VECTOR_DIMENSIONS=N`, runs migrations, applies the dimension with `scripts/configure_embeddings.py` (it only works on the empty tables of a fresh install), and verifies the `documents`/`message_embeddings` vector columns are `vector(N)` before starting — Honcho refuses to start on a dim mismatch. A custom dimension also needs an embedding model that outputs N dimensions, configured via `EMBEDDING_MODEL_CONFIG__*` in `.env`.
+- To use a non-default embedding size, set `--embedding-dim N` (or answer the prompt). This writes `EMBEDDING_VECTOR_DIMENSIONS=N` and **forces a no-start install**, because a custom dimension needs a matching embedding model and the pgvector schema must be altered before the first start. The installer prints the finish-up steps: set `EMBEDDING_MODEL_CONFIG__*` in `.env` for a model that outputs N dimensions, run `scripts/provision_db.py` then `scripts/configure_embeddings.py --yes` (it only works on the empty tables of a fresh install and prints the applied dimension to confirm `vector(N)`), then start. Honcho refuses to start on a dim mismatch.
 - CTID, bridge, rootfs storage, template storage, and root password are prompted unless supplied explicitly or generated.
 - Honcho's API is exposed on the container network interface so other LXCs can reach it on port `8000`.
 - IPv6 is disabled inside the container after creation; it is not passed as a `net0` option.
