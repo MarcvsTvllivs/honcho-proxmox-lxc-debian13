@@ -52,11 +52,11 @@ Install options:
   --no-auth                 Disable Honcho auth (trusted LAN only)
   --no-start                Create the LXC but do not start Honcho, so you can
                             edit /opt/honcho/.env before the first start
-  --yes                     Skip confirmation prompt; requires --ctid and an OpenAI key env var
+  --yes                     Skip confirmation prompt; requires --ctid (and an OpenAI key env var unless --no-start)
   --dry-run                 Print planned actions without changing anything
 
 Provider key environment variables for install:
-  HONCHO_LLM_OPENAI_API_KEY / LLM_OPENAI_API_KEY (required for the default config)
+  HONCHO_LLM_OPENAI_API_KEY / LLM_OPENAI_API_KEY (required to start; optional with --no-start)
   HONCHO_LLM_ANTHROPIC_API_KEY / LLM_ANTHROPIC_API_KEY (optional)
   HONCHO_LLM_GEMINI_API_KEY / LLM_GEMINI_API_KEY (optional)
 
@@ -413,27 +413,34 @@ install_main() {
     have python3 || die "python3 is required to generate a Honcho admin JWT when auth is enabled."
   fi
 
-  if [[ "$DRY_RUN" != true && -z "$OPENAI_KEY" ]]; then
-    if [[ "$YES" == true ]]; then
-      die "HONCHO_LLM_OPENAI_API_KEY or LLM_OPENAI_API_KEY is required with --yes. Honcho's default self-host config uses OpenAI-compatible chat and embedding models."
-    fi
-    warn "No OpenAI-compatible API key provided. Honcho's default self-host config requires LLM_OPENAI_API_KEY for chat and embeddings."
-    read -rsp "OpenAI-compatible API key (required): " OPENAI_KEY; printf '\n' || true
+  # Decide auto-start first: whether an OpenAI key is required now depends on it.
+  if [[ "$YES" != true ]]; then
+    local start_ans=""
+    read -rp "Start Honcho now? Choose 'n' to edit /opt/honcho/.env before first start [Y/n]: " start_ans
+    [[ "$start_ans" =~ ^[Nn] ]] && AUTO_START="false"
   fi
-  if [[ "$DRY_RUN" != true && -z "$OPENAI_KEY" ]]; then
-    die "An OpenAI-compatible API key is required for the default Honcho config."
+
+  # Honcho's default config needs an OpenAI-compatible key to *start*. Require it
+  # only when auto-starting; with --no-start the user can add it to .env before
+  # the first start, so it is optional here.
+  if [[ "$DRY_RUN" != true && "$AUTO_START" == true && -z "$OPENAI_KEY" ]]; then
+    if [[ "$YES" == true ]]; then
+      die "HONCHO_LLM_OPENAI_API_KEY or LLM_OPENAI_API_KEY is required with --yes (Honcho's default config needs it to start). Use --no-start to install without starting and add the key to .env later."
+    fi
+    warn "No OpenAI-compatible API key provided. Honcho's default config requires LLM_OPENAI_API_KEY to start."
+    read -rsp "OpenAI-compatible API key (required to start): " OPENAI_KEY; printf '\n' || true
+    [[ -n "$OPENAI_KEY" ]] || die "An OpenAI-compatible API key is required to start Honcho. Re-run with --no-start to install without it and add the key to .env later."
+  elif [[ "$DRY_RUN" != true && -z "$OPENAI_KEY" ]]; then
+    if [[ "$YES" != true ]]; then
+      read -rsp "OpenAI-compatible API key (optional now; add to .env before starting): " OPENAI_KEY; printf '\n' || true
+    fi
+    [[ -n "$OPENAI_KEY" ]] || warn "No OpenAI key set. Add LLM_OPENAI_API_KEY to /opt/honcho/.env before starting Honcho, or it will fail to start."
   fi
   if [[ "$DRY_RUN" != true && -z "$ANTHROPIC_KEY" ]]; then
     read -rsp "Anthropic API key (optional): " ANTHROPIC_KEY; printf '\n' || true
   fi
   if [[ "$DRY_RUN" != true && -z "$GEMINI_KEY" ]]; then
     read -rsp "Gemini API key (optional): " GEMINI_KEY; printf '\n' || true
-  fi
-
-  if [[ "$YES" != true ]]; then
-    local start_ans=""
-    read -rp "Start Honcho now? Choose 'n' to edit /opt/honcho/.env before first start [Y/n]: " start_ans
-    [[ "$start_ans" =~ ^[Nn] ]] && AUTO_START="false"
   fi
 
   log "Detected/selected defaults"

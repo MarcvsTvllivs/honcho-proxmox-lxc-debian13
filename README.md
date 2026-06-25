@@ -95,7 +95,7 @@ With no subcommand and a real terminal, the script opens the same install/update
 
 ### Non-interactive install
 
-`--yes` skips confirmation prompts but still requires enough information to avoid guessing important values. Provide at least `--ctid` and preseed an OpenAI-compatible provider key through the environment. Honcho's default self-host config uses OpenAI-compatible chat and embedding models:
+`--yes` skips confirmation prompts but still requires enough information to avoid guessing important values. Provide at least `--ctid` and preseed an OpenAI-compatible provider key through the environment, because Honcho's default self-host config will not start without one. (Pass `--no-start` to skip this requirement: the LXC is created without starting Honcho, and you add the key to `/opt/honcho/.env` before the first start.)
 
 ```bash
 export HONCHO_LLM_OPENAI_API_KEY='<openai-compatible-api-key>'
@@ -105,7 +105,7 @@ export HONCHO_LLM_OPENAI_API_KEY='<openai-compatible-api-key>'
 Supported key environment variables:
 
 ```text
-HONCHO_LLM_OPENAI_API_KEY      # required for the default config
+HONCHO_LLM_OPENAI_API_KEY      # required to start (optional with --no-start)
 HONCHO_LLM_ANTHROPIC_API_KEY  # optional, for custom Honcho model routing
 HONCHO_LLM_GEMINI_API_KEY     # optional, for custom Honcho model routing
 ```
